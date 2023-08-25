@@ -1,40 +1,30 @@
-import okhttp3.mockwebserver.MockResponse;
-import okhttp3.mockwebserver.MockWebServer;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.MediaType;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 import software.amazon.awssdk.core.async.AsyncRequestBody;
 import software.amazon.awssdk.core.async.SdkPublisher;
 import software.amazon.awssdk.services.s3.S3AsyncClient;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.PutObjectResponse;
 import java.nio.ByteBuffer;
+
+import static org.mockito.Mockito.*;
 
 public class S3ServiceTest2 {
 
-    private static S3AsyncClient s3AsyncClient;
-    private static MockWebServer mockWebServer;
-    private static S3Service s3Service;
+    @Mock
+    private S3AsyncClient s3AsyncClient;
 
-    @BeforeAll
-    static void setUp() throws Exception {
-        mockWebServer = new MockWebServer();
-        mockWebServer.start();
-        
-        String serverUrl = mockWebServer.url("/").toString();
-        s3AsyncClient = S3AsyncClient.builder()
-                .region(Region.US_EAST_1)
-                .endpointOverride(new URI(serverUrl))
-                .build();
+    private S3Service s3Service;
 
+    @BeforeEach
+    void setUp() {
+        MockitoAnnotations.openMocks(this);
         s3Service = new S3Service(s3AsyncClient, "test-bucket");
-    }
-
-    @AfterAll
-    static void tearDown() throws Exception {
-        s3AsyncClient.close();
-        mockWebServer.shutdown();
     }
 
     @Test
@@ -45,20 +35,21 @@ public class S3ServiceTest2 {
                 .key("test-key")
                 .build();
 
-        mockWebServer.enqueue(new MockResponse()
-                .setResponseCode(200)
-                .setBody("{\"ETag\":\"test-etag\"}")
-                .addHeader("Content-Type", MediaType.APPLICATION_JSON_VALUE));
+        PutObjectResponse putObjectResponse = PutObjectResponse.builder()
+                .eTag("test-etag")
+                .build();
 
-        SdkPublisher<ByteBuffer> requestBody = AsyncRequestBody.fromPublisher(data);
-        
+        when(s3AsyncClient.putObject(any(PutObjectRequest.class), any(AsyncRequestBody.class)))
+                .thenReturn(Mono.just(putObjectResponse));
+
         StepVerifier.create(s3Service.uploadObjectToS3("test-key", data))
                 .expectNext("Object uploaded successfully to S3: PutObjectResponse{ETag='test-etag'}")
                 .verifyComplete();
 
-        RecordedRequest recordedRequest = mockWebServer.takeRequest();
-        assertThat(recordedRequest.getMethod()).isEqualTo("PUT");
-        assertThat(recordedRequest.getPath()).isEqualTo("/test-key");
-        assertThat(recordedRequest.getBody().readUtf8()).isEqualTo("test-data");
+        ArgumentCaptor<PutObjectRequest> requestCaptor = ArgumentCaptor.forClass(PutObjectRequest.class);
+        verify(s3AsyncClient, times(1)).putObject(requestCaptor.capture(), any(AsyncRequestBody.class));
+
+        PutObjectRequest capturedRequest = requestCaptor.getValue();
+        assertThat(capturedRequest).usingRecursiveComparison().isEqualTo(expectedRequest);
     }
 }
